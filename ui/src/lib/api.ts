@@ -227,6 +227,12 @@ export const LOCAL_ARTIST_PREFIX = 'LOCALARTIST:';
 export const LOCAL_PLAYLIST_PREFIX = 'LOCALPLAYLIST:';
 export const isLocalPlaylist = (id: string | undefined | null): boolean =>
 	!!id && id.startsWith(LOCAL_PLAYLIST_PREFIX);
+/**
+ * The permanent playlist every download lands in (mirrors `OFFLINE_PLAYLIST` in download.rs). It is
+ * an ordinary local playlist apart from being made and filled by Rust, so only its English title
+ * needs rewording on the way in.
+ */
+export const OFFLINE_PLAYLIST = 'Offline Playlist';
 /** Anything with no YouTube item behind it: nothing to share, no radio, no account to save it to. */
 export const isLocalId = (id: string | undefined | null): boolean =>
 	!!id &&
@@ -713,10 +719,13 @@ const relabelOnRepeat = (item: BrowseItem): BrowseItem =>
 /** Same reason as On Repeat: Rust's "12 songs" on a playlist kept on this machine. */
 const relabelLocal = (item: BrowseItem): BrowseItem => {
 	if (!isLocalPlaylist(item.id)) return relabelOnRepeat(item);
+	// The permanent offline playlist is made by Rust, so its English title is reworded here the
+	// same way On Repeat's is. Matched by title because that is all the card carries.
+	const titled = item.title === OFFLINE_PLAYLIST ? { ...item, title: t('library.offline_playlist') } : item;
 	const count = parseInt(item.subtitle ?? '', 10);
-	if (Number.isNaN(count)) return item;
+	if (Number.isNaN(count)) return titled;
 	return {
-		...item,
+		...titled,
 		subtitle:
 			count === 1
 				? t('library.local_playlist_subtitle_one')

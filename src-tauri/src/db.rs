@@ -1491,6 +1491,42 @@ impl Db {
         let conn = self.0.lock().unwrap();
         let _ = conn.execute("DELETE FROM downloads WHERE video_id = ?1", [video_id]);
     }
+
+    // --- the permanent "Offline Playlist" (download.rs) -----------------------------------------
+
+    /// The row id of the permanent offline playlist, creating it on first use. The id is pinned in
+    /// `settings` so a user playlist that happens to be called the same thing is never mistaken for
+    /// it, and vice versa. `None` only when the row could not be written at all.
+    pub fn offline_playlist_id(&self, now: i64) -> Option<i64> {
+        const KEY: &str = "offline_playlist_id";
+        if let Some(id) = self
+            .get_setting(KEY)
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|id| self.local_playlist(*id).is_some())
+        {
+            return Some(id);
+        }
+        // Gone (the user deleted it) or never made: (re)create it and re-pin the id.
+        let id = self.create_local_playlist(crate::download::OFFLINE_PLAYLIST, now).ok()?;
+        self.set_setting(KEY, &id.to_string());
+        Some(id)
+    }
+
+    /// Drop every row whose `video_id` is `LOCAL:<path>` from the offline playlist, after a file
+    /// was deleted (the download row and the playlist row go together). No-op when there is none.
+    pub fn remove_offline_playlist_path(&self, path: &str, now: i64) {
+        let Some(id) = self.get_setting("offline_playlist_id").and_then(|s| s.parse::<i64>().ok())
+        else {
+            return;
+        };
+        let video_id = format!("{}{}", crate::local::SONG_PREFIX, path);
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM local_playlist_tracks WHERE playlist_id = ?1 AND video_id = ?2",
+            rusqlite::params![id, video_id],
+        );
+        let _ = conn.execute("UPDATE local_playlists SET updated_at = ?1 WHERE id = ?2", [now, id]);
+    }
 }
 
 /// See [`Listening::songs`].

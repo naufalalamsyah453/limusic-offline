@@ -877,6 +877,10 @@ pub fn run() {
             // scope is empty — the folders it may read are the ones the user picked (local.rs).
             local::allow_music_paths(&handle, &app_state.db);
 
+            // Materialise the permanent offline playlist up front, so it is in the sidebar from the
+            // first launch rather than appearing only once something has been downloaded.
+            let _ = app_state.db.offline_playlist_id(crate::db::now_secs());
+
             // The login entry runs whichever binary last wrote it. A dev build that wrote it leaves
             // the login launch loading the vite server, which isn't running then: tray icon, no
             // window, "Could not connect to localhost". An AppImage moved after enabling leaves it

@@ -40,6 +40,10 @@ const MAX_RERESOLVES: u32 = 3;
 /// The setting that overrides where downloads go. Empty/absent → `downloads_dir()` default.
 const DIR_SETTING: &str = "download_dir";
 
+/// The permanent playlist every download lands in. Rust never learns the UI language, so the title
+/// is English and `api.ts` rewords it on the way in (same as On Repeat and the local cards).
+pub const OFFLINE_PLAYLIST: &str = "Offline Playlist";
+
 /// A row in the Downloads page: what was downloaded and where it lives now.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -355,6 +359,7 @@ pub async fn download(
     match download_inner(&state, &song).await {
         Ok(d) => {
             state.db.put_download(&d);
+            add_to_offline_playlist(&state.db, &d);
             emit(
                 &app,
                 DownloadProgress {
@@ -480,6 +485,40 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// The `SongItem` a downloaded track is stored as inside the offline playlist. Its `video_id` is
+/// the same `LOCAL:<path>` the Downloads page plays, so the row plays from disk with no network and
+/// shares the local-music machinery (queue, gapless, media keys). Only the fields the UI renders
+/// are filled; everything account-shaped stays empty, since a downloaded file belongs to no account.
+fn offline_song(d: &Download) -> innertube::SongItem {
+    let duration = d.duration_secs.filter(|s| *s > 0).map(|s| {
+        let (h, m, sec) = (s / 3600, (s % 3600) / 60, s % 60);
+        if h > 0 {
+            format!("{h}:{m:02}:{sec:02}")
+        } else {
+            format!("{m}:{sec:02}")
+        }
+    });
+    innertube::SongItem {
+        video_id: format!("{}{}", crate::local::SONG_PREFIX, d.path),
+        title: d.title.clone(),
+        artists: d.artists.clone(),
+        album: d.album.clone(),
+        thumbnail: d.thumbnail.clone(),
+        duration,
+        ..Default::default()
+    }
+}
+
+/// Put a finished download into the permanent offline playlist. Idempotent: re-downloading the
+/// same track (same path) is one row, because the playlist's unique key is the `LOCAL:<path>` id.
+fn add_to_offline_playlist(db: &crate::db::Db, d: &Download) {
+    let now = now_secs();
+    let Some(id) = db.offline_playlist_id(now) else { return };
+    let song = offline_song(d);
+    let Ok(json) = serde_json::to_string(&song) else { return };
+    let _ = db.add_local_playlist_tracks(id, &[(song.video_id.clone(), json)], now);
+}
+
 /// The Downloads page's data: every stored row whose file still exists. A row whose file was
 /// deleted outside Limusic is dropped here and forgotten, so the page never offers a dead track.
 pub fn list(db: &crate::db::Db) -> Vec<Download> {
@@ -492,6 +531,8 @@ pub fn list(db: &crate::db::Db) -> Vec<Download> {
                 live.push(d);
             }
             _ => {
+                // Gone from disk: drop the row and its offline-playlist entry together.
+                db.remove_offline_playlist_path(&d.path, now_secs());
                 let _ = db.delete_download(&d.video_id);
             }
         }
@@ -500,7 +541,7 @@ pub fn list(db: &crate::db::Db) -> Vec<Download> {
     live
 }
 
-/// Delete a downloaded file and its row. Missing file is not an error: the goal is "not there".
+/// Delete a downloaded file and its row, and take it out of the offline playlist.
 pub fn delete(db: &crate::db::Db, video_id: &str) -> Result<(), String> {
     if let Some(d) = db.download(video_id) {
         match std::fs::remove_file(&d.path) {
@@ -508,6 +549,7 @@ pub fn delete(db: &crate::db::Db, video_id: &str) -> Result<(), String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
         }
+        db.remove_offline_playlist_path(&d.path, now_secs());
     }
     db.delete_download(video_id);
     Ok(())

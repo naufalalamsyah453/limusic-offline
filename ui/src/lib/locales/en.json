@@ -402,6 +402,7 @@
 		"no_subscriptions": "No subscriptions yet. Subscribe to an artist from their page to keep them here.",
 		"on_repeat": "On Repeat",
 		"on_repeat_subtitle": "{count} songs you've played most this month",
+		"offline_playlist": "Offline Playlist",
 		"songs_count": "{count} songs",
 		"songs_count_one": "1 song",
 		"on_this_device": "On this device",
