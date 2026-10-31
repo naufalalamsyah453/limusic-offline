@@ -26,7 +26,8 @@ permissions:
   contents: write # create/update the release and upload assets
 
 concurrency:
-  group: windows-build-${{ github.ref }}
+  # Shares a group with Checks: at most one CI runs repo-wide, everything else queues.
+  group: limusic-ci
   cancel-in-progress: false
 
 env:

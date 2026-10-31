@@ -20,10 +20,10 @@ on:
     branches: [master, dev]
   pull_request:
 
-# A second push to the same PR makes the earlier run irrelevant.
+# One CI at a time repo-wide: share a group with the release build so everything else queues.
 concurrency:
-  group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  group: limusic-ci
+  cancel-in-progress: false
 
 permissions:
   contents: read

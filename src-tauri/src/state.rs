@@ -4268,13 +4268,14 @@ pub struct DownloadSeed {
 
 impl DownloadSeed {
     pub fn from_song(s: &SongItem) -> Self {
+        let secs = parse_duration_ms(s.duration.as_deref()) / 1000;
         DownloadSeed {
             video_id: s.video_id.clone(),
             title: s.title.clone(),
             artists: s.artists.clone(),
             album: s.album.clone(),
             thumbnail: s.thumbnail.clone(),
-            duration_secs: parse_duration_ms(s.duration.as_deref()).map(|ms| ms / 1000),
+            duration_secs: (secs > 0).then_some(secs),
             is_upload: s.is_upload,
         }
     }

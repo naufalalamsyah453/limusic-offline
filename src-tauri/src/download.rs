@@ -207,9 +207,9 @@ async fn range_get(
 }
 
 /// Pull the whole stream to `path`, appending bounded ranges and reporting progress. Returns the
-/// bytes written and the total the CDN advertised (first time it says). `Err(Refused)` means the
-/// URL went stale on a later range: the caller resolves a fresh one and calls this again with the
-/// bytes already on disk, so a download resumes rather than restarts.
+/// bytes written and the content type the CDN reported. `Err(Refused)` means the URL went stale on
+/// a later range: the caller resolves a fresh one and calls this again with the bytes already on
+/// disk, so a download resumes rather than restarts.
 async fn fetch_to_file(
     app: &AppHandle,
     video_id: &str,
@@ -218,14 +218,13 @@ async fn fetch_to_file(
     headers: &HashMap<String, String>,
     path: &Path,
     already: u64,
-    known_total: Option<u64>,
-) -> Result<(u64, Option<u64>, Option<String>), Refused> {
+) -> Result<(u64, Option<String>), Refused> {
     use std::io::Write;
 
     let mut file =
         std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|_| Refused)?;
     let mut done = already;
-    let mut total = known_total;
+    let mut total: Option<u64> = None;
     let mut content_type: Option<String> = None;
     // How large an upstream request we assume the server will honour. googlevideo caps some URLs
     // near the start; a short body there means "the file ends here" for a bounded range.
@@ -276,7 +275,7 @@ async fn fetch_to_file(
         }
     }
     let _ = file.flush();
-    Ok((done, total, content_type))
+    Ok((done, content_type))
 }
 
 // --- tagging ------------------------------------------------------------------------------------
@@ -406,7 +405,6 @@ async fn download_inner(
     let _ = std::fs::remove_file(&tmp);
 
     let mut done: u64 = 0;
-    let mut total: Option<u64> = None;
     let mut itag: i64 = 0;
     let mut content_type: Option<String> = None;
     let mut attempts = 0u32;
@@ -427,15 +425,11 @@ async fn download_inner(
             &data.headers,
             &tmp,
             done,
-            total,
         )
         .await
         {
-            Ok((n, t, ct)) => {
+            Ok((n, ct)) => {
                 done = n;
-                if total.is_none() {
-                    total = t;
-                }
                 if content_type.is_none() {
                     content_type = ct;
                 }
