@@ -8,6 +8,7 @@ mod commands;
 mod db;
 mod diagnostics;
 mod discord;
+mod download;
 mod hotkeys;
 mod http;
 mod import;
@@ -1189,6 +1190,12 @@ pub fn run() {
             commands::get_local_library,
             commands::add_local_folder,
             commands::remove_local_folder,
+            commands::download_track,
+            commands::list_downloads,
+            commands::delete_download,
+            commands::download_progress,
+            commands::download_dir,
+            commands::set_download_dir,
             commands::allow_font_file,
             commands::get_artist,
             commands::get_artist_appears_on,

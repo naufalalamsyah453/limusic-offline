@@ -267,6 +267,20 @@ impl Db {
                 manual          INTEGER NOT NULL DEFAULT 0,
                 updated_at      INTEGER NOT NULL
             );
+            -- Offline downloads (download.rs): the user's own data, like `local_playlists`, never a
+            -- cache. One row per kept track, keyed by videoId so re-downloading replaces the row.
+            -- `path` is where the audio file sits on disk; the list drops a row whose file is gone.
+            CREATE TABLE IF NOT EXISTS downloads (
+                video_id      TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                artists       TEXT NOT NULL,
+                album         TEXT,
+                thumbnail     TEXT,
+                path          TEXT NOT NULL,
+                size          INTEGER NOT NULL DEFAULT 0,
+                created_at    INTEGER NOT NULL,
+                duration_secs INTEGER
+            );
             "#,
         )?;
         // Migrate pre-Phase-4 DBs that predate the loudness_db column. Errors ("duplicate column")
@@ -1391,6 +1405,91 @@ impl Db {
         }
         out.sort_by(|a, b| order(a).cmp(&order(b)));
         out
+    }
+
+    // --- offline downloads (download.rs) --------------------------------------------------------
+
+    /// Insert or replace a downloaded track's row (`videoId` is the key).
+    pub fn put_download(&self, d: &crate::download::Download) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO downloads
+                (video_id, title, artists, album, thumbnail, path, size, created_at, duration_secs)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(video_id) DO UPDATE SET
+                title = excluded.title, artists = excluded.artists, album = excluded.album,
+                thumbnail = excluded.thumbnail, path = excluded.path, size = excluded.size,
+                created_at = excluded.created_at, duration_secs = excluded.duration_secs",
+            rusqlite::params![
+                d.video_id,
+                d.title,
+                d.artists,
+                d.album,
+                d.thumbnail,
+                d.path,
+                d.size as i64,
+                d.created_at,
+                d.duration_secs,
+            ],
+        );
+    }
+
+    /// Every stored download row, newest first is the caller's job (`download::list`).
+    pub fn downloads(&self) -> Vec<crate::download::Download> {
+        let conn = self.0.lock().unwrap();
+        let mut out = Vec::new();
+        let row = |r: &rusqlite::Row| {
+            Ok(crate::download::Download {
+                video_id: r.get(0)?,
+                title: r.get(1)?,
+                artists: r.get(2)?,
+                album: r.get(3)?,
+                thumbnail: r.get(4)?,
+                path: r.get(5)?,
+                size: r.get::<_, i64>(6)?.max(0) as u64,
+                created_at: r.get(7)?,
+                duration_secs: r.get(8)?,
+            })
+        };
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT video_id, title, artists, album, thumbnail, path, size, created_at, duration_secs
+             FROM downloads",
+        ) {
+            if let Ok(rows) = stmt.query_map([], row) {
+                out.extend(rows.flatten());
+            }
+        }
+        out
+    }
+
+    /// One download by videoId, if it is stored.
+    pub fn download(&self, video_id: &str) -> Option<crate::download::Download> {
+        let conn = self.0.lock().unwrap();
+        conn.query_row(
+            "SELECT video_id, title, artists, album, thumbnail, path, size, created_at, duration_secs
+             FROM downloads WHERE video_id = ?1",
+            [video_id],
+            |r| {
+                Ok(crate::download::Download {
+                    video_id: r.get(0)?,
+                    title: r.get(1)?,
+                    artists: r.get(2)?,
+                    album: r.get(3)?,
+                    thumbnail: r.get(4)?,
+                    path: r.get(5)?,
+                    size: r.get::<_, i64>(6)?.max(0) as u64,
+                    created_at: r.get(7)?,
+                    duration_secs: r.get(8)?,
+                })
+            },
+        )
+        .ok()
+    }
+
+    /// Forget a download row (the caller removes the file).
+    pub fn delete_download(&self, video_id: &str) {
+        let conn = self.0.lock().unwrap();
+        let _ = conn.execute("DELETE FROM downloads WHERE video_id = ?1", [video_id]);
     }
 }
 

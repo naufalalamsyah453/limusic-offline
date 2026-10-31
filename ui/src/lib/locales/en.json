@@ -139,7 +139,23 @@
 		"saved_accounts_hint": "Pick a saved account to switch to it.",
 		"history": "History",
 		"stats": "Stats",
+		"downloads": "Downloads",
 		"no_channels": "YouTube did not return any selectable channels."
+	},
+	"downloads": {
+		"title": "Downloads",
+		"download": "Download",
+		"started": "Downloading \"{title}\"...",
+		"downloading": "Downloading",
+		"done": "\"{title}\" saved for offline listening",
+		"failed": "Could not download \"{title}\"",
+		"removed": "Download removed",
+		"remove": "Remove download",
+		"empty": "Nothing downloaded yet",
+		"empty_hint": "Use the ⋯ menu on any track and choose Download to keep it on this device.",
+		"no_dir": "Choose a folder",
+		"pick_dir": "Choose where downloads are saved",
+		"dir_set": "Download folder updated"
 	},
 	"player": {
 		"play": "Play",

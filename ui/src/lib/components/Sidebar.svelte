@@ -18,7 +18,8 @@
 		SquareArrowLeft01Icon,
 		SquareArrowRight01Icon,
 		SpotifyIcon,
-		Chart02Icon
+		Chart02Icon,
+		Download04Icon
 	} from '@hugeicons/core-free-icons';
 	import { toggleMode } from 'mode-watcher';
 	import { Button } from '$lib/components/ui/button';
@@ -34,6 +35,7 @@
 		{ href: '/', label: t('nav.home'), icon: Home01Icon },
 		{ href: '/search', label: t('nav.search'), icon: Search01Icon },
 		{ href: '/library', label: t('nav.library'), icon: LibraryIcon },
+		{ href: '/downloads', label: t('nav.downloads'), icon: Download04Icon },
 		{ href: '/stats', label: t('nav.stats'), icon: Chart02Icon }
 	]);
 	const isActive = (href: string) =>

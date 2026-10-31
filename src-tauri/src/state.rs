@@ -1190,7 +1190,10 @@ impl AppState {
 
     /// `is_upload` comes off the queue row, never off `/player`: the response that has to be
     /// handled here (LOGIN_REQUIRED) carries no `videoDetails` to read it from. Issue #71.
-    async fn resolve(
+    ///
+    /// `pub(crate)` so the offline-download path (`download.rs`) can reuse the exact same resolve
+    /// chain the player uses, instead of resolving a second time through the orchestrator.
+    pub(crate) async fn resolve(
         &self,
         video_id: &str,
         is_upload: bool,
@@ -4238,6 +4241,42 @@ impl AppState {
             q.items.extend(upcoming.iter().map(track_to_song));
         }
         self.emit_queue().await;
+    }
+}
+
+/// Everything the offline-download path (`download.rs`) needs to fetch and name one track. Built
+/// from a [`SongItem`] the UI already holds, so a download works even when the resolve reply
+/// carries little metadata of its own.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadSeed {
+    pub video_id: String,
+    pub title: String,
+    #[serde(default)]
+    pub artists: String,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+    /// The track's length in seconds, if known. Used for the cache horizon only.
+    #[serde(default)]
+    pub duration_secs: Option<i64>,
+    /// One of the signed-in user's own uploads. Only an authenticated client streams those.
+    #[serde(default)]
+    pub is_upload: bool,
+}
+
+impl DownloadSeed {
+    pub fn from_song(s: &SongItem) -> Self {
+        DownloadSeed {
+            video_id: s.video_id.clone(),
+            title: s.title.clone(),
+            artists: s.artists.clone(),
+            album: s.album.clone(),
+            thumbnail: s.thumbnail.clone(),
+            duration_secs: parse_duration_ms(s.duration.as_deref()).map(|ms| ms / 1000),
+            is_upload: s.is_upload,
+        }
     }
 }
 

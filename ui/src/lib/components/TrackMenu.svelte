@@ -25,7 +25,8 @@
 		DashboardSquare02Icon,
 		Share08Icon,
 		PreferenceVerticalIcon,
-		PencilEdit02Icon
+		PencilEdit02Icon,
+		Download04Icon
 	} from '@hugeicons/core-free-icons';
 	import * as api from '$lib/api';
 	import type { SongItem } from '$lib/api';
@@ -166,8 +167,19 @@
 		enqueue([song], true);
 	}
 
-	async function removeFromPlaylist() {
-		if (!playlistId || !song.set_video_id) return;
+	// Keep a copy of this track on disk (offline downloads). Fire-and-forget: the backend runs it
+	// in the background and the Downloads page follows the progress event, so there is nothing to
+	// await past the "started" acknowledgement.
+	async function download() {
+		try {
+			await api.downloadTrack(song);
+			toast.success(t('downloads.started', { title: song.title }));
+		} catch (e) {
+			toast.error(String(e));
+		}
+	}
+
+	async function removeFromPlaylist() {		if (!playlistId || !song.set_video_id) return;
 		const setVideoId = song.set_video_id;
 		try {
 			await api.removeFromPlaylist(playlistId, song.video_id, setVideoId);
@@ -360,6 +372,12 @@
 			{isPick ? t('home.remove_shortcut') : t('home.add_shortcut')}
 		</button>
 		{#if !isLocal}
+			<button
+				class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/10"
+				onclick={(e) => run(e, download)}
+			>
+				<HugeiconsIcon icon={Download04Icon} class="h-4 w-4" /> {t('downloads.download')}
+			</button>
 			<button
 				class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/10"
 				onclick={(e) =>

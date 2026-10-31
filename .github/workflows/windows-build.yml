@@ -1,0 +1,204 @@
+name: Build Windows release
+
+# Fork-only release pipeline. Builds the Windows NSIS installer for a tag that ALREADY EXISTS and
+# attaches it to that release. It is deliberately self-contained: the upstream `windows-release.yml`
+# reads its libmpv DLL and signing key from the *upstream* repo's releases and secrets, which a fork
+# does not own. Here nothing is signed (createUpdaterArtifacts is turned off for the build) and the
+# libmpv DLL is fetched from upstream's public `deps` release, which anyone can download.
+#
+# Trigger it two ways:
+#   * push a tag:      git tag v1.4.0-offline && git push origin v1.4.0-offline
+#   * run by hand:      Actions > Build Windows release > Run workflow (give the tag),
+#                       or leave the tag empty to build the current ref and let the job
+#                       create the release for you.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build for (leave empty to use a fresh vX.Y.Z-offline tag)
+        required: false
+        type: string
+
+permissions:
+  contents: write # create/update the release and upload assets
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Same pinned libmpv the upstream Windows build ships (shinchiro's 20260610 build, mpv
+  # v0.41.0-744-g304426c39): a 7z with libmpv-2.dll at its root. Baseline x86_64, not the `-v3-`
+  # variant (which needs AVX2). Served from upstream's public release, so a fork can fetch it.
+  MPV_DEV_URL: https://github.com/SimoHypers/limusic/releases/download/deps/libmpv-2-x86_64-20260610-git-304426c.7z
+  MPV_DIR: ${{ github.workspace }}\.libmpv
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Resolve the tag
+        id: rel
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: ${TAG:-<none, will be created>}"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.rel.outputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Read the app version
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(jq -r .version src-tauri/tauri.conf.json)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "app version: $VERSION"
+
+      # The tag the release goes to. When one was pushed it is that tag; otherwise a predictable
+      # name off the app version. `gh release create` makes the git tag on the remote itself, so a
+      # manual run does not push a ref that would immediately fire this workflow again.
+      - name: Determine the release tag
+        id: reltag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.rel.outputs.tag }}"
+          [ -n "$TAG" ] || TAG="v${{ steps.ver.outputs.version }}-offline"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release tag: $TAG"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend deps
+        shell: bash
+        run: cd ui && pnpm install --frozen-lockfile
+
+      - name: Rust (MSVC)
+        shell: bash
+        run: rustup default stable-msvc
+
+      # RUSTFLAGS before rust-cache so the cache key matches what cargo actually builds with.
+      - name: Resolve RUSTFLAGS (link path for libmpv)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FLAGS="-L native=${{ github.workspace }}\.libmpv"
+          echo "RUSTFLAGS=$FLAGS" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=$FLAGS"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Tauri CLI
+        shell: bash
+        run: npm install -g "@tauri-apps/cli@2.11.5"
+
+      # The dev package ships a MinGW import lib the MSVC linker can't read, so synthesise a real
+      # mpv.lib from the DLL's export table (mirrors the upstream Windows workflow).
+      - name: Build the libmpv import library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "$env:MPV_DIR" | Out-Null
+          curl.exe -fsSL -o "$env:MPV_DIR\mpv-dev.7z" "$env:MPV_DEV_URL"
+          7z x "$env:MPV_DIR\mpv-dev.7z" -o"$env:MPV_DIR" -y | Out-Null
+          if (-not (Test-Path "$env:MPV_DIR\libmpv-2.dll")) { throw "libmpv-2.dll not found in the dev package" }
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+
+          Set-Location "$env:MPV_DIR"
+          $names = & dumpbin /exports libmpv-2.dll |
+            Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\w+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+          if ($names.Count -lt 50) { throw "parsed only $($names.Count) exports from libmpv-2.dll" }
+          @("EXPORTS") + ($names | ForEach-Object { "    $_" }) | Set-Content -Path mpv.def -Encoding ascii
+          & lib /def:mpv.def /name:libmpv-2.dll /out:mpv.lib /machine:x64
+          if (-not (Test-Path "$env:MPV_DIR\mpv.lib")) { throw "lib.exe did not produce mpv.lib" }
+
+          Copy-Item "$env:MPV_DIR\libmpv-2.dll" "$env:GITHUB_WORKSPACE\src-tauri\libmpv-2.dll" -Force
+
+      # The fork has no signing key, so build an unsigned installer: createUpdaterArtifacts off (no
+      # .sig) and no updater endpoint is shipped. beforeBuildCommand emptied because we run the UI
+      # build ourselves just below.
+      - name: Build the installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd ui && pnpm build)
+          tauri build --bundles nsis \
+            --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Collect the installer
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE="$(ls target/release/bundle/nsis/*-setup.exe | head -1)"
+          [ -f "$EXE" ] || { echo "::error::no NSIS installer produced"; find target/release/bundle -maxdepth 3; exit 1; }
+          echo "exe=$EXE" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$EXE")" >> "$GITHUB_OUTPUT"
+          ls -la target/release/bundle/nsis/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: limusic-windows-${{ steps.reltag.outputs.tag }}
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create the release when it does not exist
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.reltag.outputs.tag }}"
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Limusic offline $TAG" \
+              --notes "Windows build of Limusic with offline downloads.
+
+          Added in this fork:
+          - Download any track to disk from its ⋯ menu.
+          - A Downloads page (sidebar) to list, play and delete what is kept.
+          - Tags and cover art written into each saved file." \
+              --latest
+          fi
+
+      - name: Attach the installer to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.reltag.outputs.tag }}"
+          gh release upload "$TAG" "${{ steps.artifact.outputs.exe }}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          echo "uploaded ${{ steps.artifact.outputs.name }} to $TAG"

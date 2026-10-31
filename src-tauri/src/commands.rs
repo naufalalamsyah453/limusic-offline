@@ -2327,6 +2327,77 @@ pub async fn remove_local_folder(
     scan_local(&state).await
 }
 
+// --- offline downloads (download.rs) ---------------------------------------------------------
+
+/// Fetch one track's audio to disk and record it. Runs to completion in a background task, so the
+/// UI stays responsive and follows progress over the `download-progress` event. The arguments come
+/// from the `SongItem` the row already holds, so no extra metadata round trip is needed.
+#[tauri::command]
+pub async fn download_track(
+    state: St<'_>,
+    video_id: String,
+    title: String,
+    artists: Option<String>,
+    album: Option<String>,
+    thumbnail: Option<String>,
+    duration_secs: Option<i64>,
+    is_upload: Option<bool>,
+) -> Result<(), String> {
+    let seed = crate::state::DownloadSeed {
+        video_id,
+        title,
+        artists: artists.unwrap_or_default(),
+        album,
+        thumbnail,
+        duration_secs,
+        is_upload: is_upload.unwrap_or(false),
+    };
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::download::download(state, seed).await {
+            tracing::warn!(error = %e, "download failed");
+        }
+    });
+    Ok(())
+}
+
+/// Every downloaded track whose file is still on disk, newest first.
+#[tauri::command]
+pub async fn list_downloads(state: St<'_>) -> Result<Vec<crate::download::Download>, String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::download::list(&db))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Remove a downloaded file and its row.
+#[tauri::command]
+pub async fn delete_download(state: St<'_>, video_id: String) -> Result<(), String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::download::delete(&db, &video_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// In-flight downloads, for a page that mounted after a download had already started.
+#[tauri::command]
+pub async fn download_progress() -> Result<Vec<crate::download::DownloadProgress>, String> {
+    Ok(crate::download::snapshot())
+}
+
+/// Where downloads land, for the settings row. The default when nothing is set.
+#[tauri::command]
+pub async fn download_dir(state: St<'_>) -> Result<String, String> {
+    Ok(crate::download::downloads_dir(&state.app, &state.db).to_string_lossy().to_string())
+}
+
+/// Point downloads at a specific folder. An empty string restores the default.
+#[tauri::command]
+pub async fn set_download_dir(state: St<'_>, path: String) -> Result<(), String> {
+    state.db.set_setting("download_dir", path.trim());
+    Ok(())
+}
+
 /// Disk IO + tag parsing off the async runtime's worker threads.
 async fn scan_local(state: &Arc<AppState>) -> Result<crate::local::LocalLibrary, String> {
     let app = state.app.clone();

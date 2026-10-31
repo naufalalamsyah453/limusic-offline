@@ -892,6 +892,61 @@ export const addLocalFolder = (path: string) => invoke<LocalLibrary>('add_local_
 export const removeLocalFolder = (path: string) =>
 	invoke<LocalLibrary>('remove_local_folder', { path });
 
+// --- offline downloads (download.rs) ---------------------------------------------------------
+/** A kept track on disk, as the Downloads page lists it. */
+export interface Download {
+	videoId: string;
+	title: string;
+	artists: string;
+	album?: string;
+	thumbnail?: string;
+	path: string;
+	size: number;
+	createdAt: number;
+	durationSecs?: number;
+}
+/** Live state of one in-flight download, mirrored by the `download-progress` event. */
+export interface DownloadProgress {
+	videoId: string;
+	title: string;
+	downloaded: number;
+	total: number;
+	state: 'downloading' | 'done' | 'failed' | 'cancelled';
+	error?: string;
+}
+/**
+ * Fetch one track's audio to disk. Runs in the background; follow it over `onDownloadProgress`
+ * (the returned promise resolves as soon as the download has been *started*).
+ */
+export const downloadTrack = (song: SongItem) =>
+	invoke<void>('download_track', {
+		videoId: song.video_id,
+		title: song.title,
+		artists: song.artists,
+		album: song.album ?? null,
+		thumbnail: song.thumbnail ?? null,
+		durationSecs: parseDuration(song.duration),
+		isUpload: song.is_upload ?? false
+	});
+/** Every downloaded track whose file is still on disk, newest first. */
+export const listDownloads = () => invoke<Download[]>('list_downloads');
+/** Remove a downloaded file and its row. */
+export const deleteDownload = (videoId: string) => invoke<void>('delete_download', { videoId });
+/** In-flight downloads, for a page mounted after a download already started. */
+export const downloadProgress = () => invoke<DownloadProgress[]>('download_progress');
+/** Where downloads land. */
+export const downloadDir = () => invoke<string>('download_dir');
+/** Point downloads at a specific folder (empty string restores the default). */
+export const setDownloadDir = (path: string) => invoke<void>('set_download_dir', { path });
+
+/** "M:SS" or "H:MM:SS" → seconds, or `null`. Matches the backend's `parse_duration_ms` shape. */
+function parseDuration(d: string | undefined | null): number | null {
+	if (!d) return null;
+	const parts = d.split(':').map((p) => Number(p));
+	if (parts.some((n) => !Number.isFinite(n))) return null;
+	return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
 // --- blocked artists (blocked.rs, plan 046) ---------------------------------------------------
 /** One entry in the block list. `id` is the channel browseId when the blocked row linked one. */
 export interface BlockedArtist {
@@ -1133,6 +1188,9 @@ export const onLoginError = (cb: (msg: string) => void): Promise<UnlistenFn> =>
 	listen<string>('login-error', (e) => cb(e.payload));
 export const onLoginDone = (cb: () => void): Promise<UnlistenFn> =>
 	listen('login-done', () => cb());
+/** Progress for an offline download: one event per chunk, plus a final done/failed. */
+export const onDownloadProgress = (cb: (p: DownloadProgress) => void): Promise<UnlistenFn> =>
+	listen<DownloadProgress>('download-progress', (e) => cb(e.payload));
 
 // --- lyrics ---------------------------------------------------------------------------------
 export interface LyricWord {
